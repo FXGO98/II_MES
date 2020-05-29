@@ -3,59 +3,70 @@ from opcua import ua
 
 ROOT = "ns=4;s=|var|CODESYS Control Win V3 x64.Application"
 
+
+def as_int(x):
+    return ua.Variant(x, ua.VariantType(4))
+
+
+def as_time(x):
+    return ua.Variant(x, ua.VariantType(8))
+
+
+dir_up = as_int(1)
+dir_down = as_int(2)
+dir_left = as_int(3)
+dir_right = as_int(4)
+
+tool_none = as_int(0)
+tool_1 = as_int(1)
+tool_2 = as_int(2)
+tool_3 = as_int(3)
+
+ten_secs = as_time(10000)
+fifteen_secs = as_time(15000)
+
 m = mes.MES()
 tr = m.opc_ua_interp.transmitter
 
+"""
+dirs = [dir_right, dir_right, dir_down, dir_down, dir_left,
+        dir_right, dir_down, dir_left, dir_right, dir_down,
+        dir_left, dir_right, dir_down, dir_down, dir_left,
+        dir_left, dir_left]
+
+
+tools = [tool_1, tool_1, tool_1, tool_2, tool_3]
+tool_times = [fifteen_secs, fifteen_secs, fifteen_secs, ten_secs, ten_secs]
+tool_count = [as_int(2), as_int(1), as_int(2)]
+"""
+
+dirs = [dir_right, dir_right, dir_down, dir_down, dir_down, dir_down, dir_down, dir_down,
+        dir_right, dir_right, dir_up, dir_up, dir_up, dir_up, dir_up, dir_up,
+        dir_right, dir_right, dir_down, dir_down, dir_down, dir_down, dir_down, dir_down,
+        dir_right, dir_up, dir_up, dir_up, dir_up, dir_up, dir_up, dir_left,
+        dir_down, dir_down, dir_down, dir_down, dir_down, dir_down, dir_left, dir_left,
+        dir_up, dir_up, dir_up, dir_up, dir_up, dir_up, dir_left,  dir_left,
+        dir_down, dir_down, dir_down, dir_down, dir_down, dir_down, dir_left, dir_left, dir_left]
+
+
+for i, dir_ in enumerate(dirs):
+    tr.get_node(f"{ROOT}.PLC_PRG.TAP_1.PIECE_T.dirs[{i}]").set_value(dir_)
+
+"""
+for i, tool in enumerate(tools):
+    tr.get_node(f"{ROOT}.PLC_PRG.TAP_1.PIECE_T.tools[{i}]").set_value(tool)
+
+for i, tool_time in enumerate(tool_times):
+    tr.get_node(f"{ROOT}.PLC_PRG.TAP_1.PIECE_T.tool_times[{i}]").set_value(
+        tool_time)
+
+for i, tool_cnt in enumerate(tool_count):
+    tr.get_node(f"{ROOT}.PLC_PRG.TAP_1.PIECE_T.tool_count[{i}]").set_value(
+        tool_cnt)
+"""
+
+idx = as_int(0)
+tr.get_node(f"{ROOT}.PLC_PRG.TAP_1.PIECE_T.idx").set_value(idx)
+
 piece = ua.DataValue(ua.Variant(1, ua.VariantType(5)))
-
-# dir_up = ua.Variant(1, ua.VariantType(4))
-dir_down = ua.Variant(2, ua.VariantType(4))
-dir_left = ua.Variant(3, ua.VariantType(4))
-dir_right = ua.Variant(4, ua.VariantType(4))
-
-tool_none = ua.Variant(0, ua.VariantType(5))
-tool_1 = ua.Variant(1, ua.VariantType(5))
-# tool_2 = ua.Variant(2, ua.VariantType(5))
-# tool_3 = ua.Variant(3, ua.VariantType(5))
-fifteen_secs = ua.Variant(15000, ua.VariantType(8))
-
 tr.get_node(f"{ROOT}.GVL.ST1_tp").set_value(piece)
-tr.get_node(f"{ROOT}.PLC_PRG.DIR1").set_value(dir_right)
-
-# Set conveyors
-LL = [
-    ("DIR3", dir_right),
-    ("DIR8", dir_down),
-    ("DIR9", dir_down),
-    ("DIR10", dir_left),
-    ("DIR4", dir_right),
-]
-
-for var, dir_ in LL:
-    tr.get_node(f"{ROOT}.PLC_PRG.{var}").set_value(dir_)
-
-# Set MA
-tr.get_node(f"{ROOT}.PLC_PRG.TOOL4").set_value(tool_1)
-
-# Wait for MA to start working
-print('Waiting for MA')
-while not tr.get_node(f"{ROOT}.GVL.ST4_tr").get_value():
-    pass
-
-print("Machine working!")
-tr.get_node(f"{ROOT}.PLC_PRG.TOOL4").set_value(tool_none)
-tr.get_node(f"{ROOT}.PLC_PRG.TOOL4_t").set_value(fifteen_secs)
-
-# Set the rest of the path
-LL = [
-    ("DIR10", dir_down),
-    ("DIR11", dir_down),
-    ("DIR12", dir_down),
-    ("DIR13", dir_down),
-    ("DIR14", dir_left),
-    ("DIR7", dir_left),
-    ("DIR2", dir_left),
-]
-
-for var, dir_ in LL:
-    tr.get_node(f"{ROOT}.PLC_PRG.{var}").set_value(dir_)

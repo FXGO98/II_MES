@@ -5,6 +5,7 @@ class Factory:
     def __init__(self, csv_path):
         self.units = []
         self._populate(csv_path)
+        print('Factory initiliazed successfully!')
 
     def _populate(self, csv_path):
         if len(self.units) != 0:
@@ -48,11 +49,18 @@ class Factory:
             for row in rows:
                 if code != int(row[0]):
                     self.units.append(_create_unit(lines))
-                    print(self.units[-1])
+                    # print(self.units[-1])
                     code = int(row[0])
                     lines = []
 
                 lines.append(row)
+
+    def find_unit(self, code):
+        for unit in self.units:
+            if unit.code == code:
+                return unit
+
+        return None
 
 
 class Unit:

@@ -88,19 +88,30 @@ class UDPHandler(socketserver.BaseRequestHandler):
 class XMLInterpreter(Interpreter):
     def __init__(self):
         self.handler = UDPHandler
-        self.transmitter = UDPServerEx(("127.0.0.1", 54321), self.handler)
+
+        port = 54321
+        while(port < 55000):
+            try:
+                self.transmitter = UDPServerEx(
+                    ("127.0.0.1", port), self.handler)
+                break
+            except OSError as e:
+                print(e)
+                print(f'XML Interpreter could not use port {port}!')
+                port += 1
+
         self.transmitter.timeout = 0.05
-        print('XML Interpreter initialized successfully!')
+        print(f'XML Interpreter initialized successfully on port {port}!')
 
     def recv(self):
         try:
             request = self.transmitter.handle_request()
             if request is None:
                 return None
-            print("request received!")
+            print("XML Interpreter: Request received!")
             return order.from_XML(request[0])
         except Exception as e:
-            print(e)
+            print(f'recv(): {e}')
             return None
 
     def shutdown(self):

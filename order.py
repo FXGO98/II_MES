@@ -14,6 +14,7 @@ class Order:
 class TransformOrder(Order):
     def __init__(self, ID, from_, to, qty, max_delay):
         self.ID = ID
+        self.schedulable = True
         self.from_ = from_
         self.to = to
         self.qty = qty
@@ -26,10 +27,18 @@ class TransformOrder(Order):
             self.deadline.hour, self.deadline.minute, self.deadline.second,
         )
 
+    def to_sql(self):
+        return 'insert into transformOrders (orderId, fromPiece,' + \
+            'toPiece, qty, deadline, currStatus) values ' + \
+            f'({self.ID}, "{self.from_}", "{self.to}", ' + \
+            f'{self.qty}, "{self.deadline}", "Pending");'
+
 
 class UnloadOrder(Order):
     def __init__(self, ID, type, dest, qty):
         self.ID = ID
+        self.schedulable = True
+        self.deadline = None
         self.type = type
         self.dest = dest
         self.qty = qty
@@ -39,8 +48,17 @@ class UnloadOrder(Order):
             self.ID, self.qty, self.type, self.dest
         )
 
+    def to_sql(self):
+        return 'insert into unloadOrder( orderId, piece,' + \
+            'destination, quantity, currStatus) values' + \
+            f'({self.ID}, "{self.type}", "{self.dest}", ' + \
+            f'{self.qty}, "Pending");'
+
 
 class RequestStoresOrder(Order):
+    def __init__(self):
+        self.schedulable = False
+
     def __str__(self):
         return "(Order ID: None) Request Stores"
 
@@ -75,7 +93,6 @@ def from_XML(request):
 
         elif el.tag == "Request_Stores":
             return RequestStoresOrder()
-
         else:
             raise NotImplementedError
 

@@ -1,154 +1,232 @@
-from opcua import ua
 
-"""
-Null = 0
-Boolean = 1
-SByte = 2
-Byte = 3
-Int16 = 4
-UInt16 = 5
-Int32 = 6
-UInt32 = 7
-Int64 = 8
-UInt64 = 9
-Float = 10
-Double = 11
-String = 12
-DateTime = 13
-Guid = 14
-ByteString = 15
-XmlElement = 16
-NodeId = 17
-ExpandedNodeId = 18
-StatusCode = 19
-QualifiedName = 20
-LocalizedText = 21
-ExtensionObject = 22
-DataValue = 23
-Variant = 24
-DiagnosticInfo = 25
-"""
-
-
-
-dir_up = ua.Variant(1, ua.VariantType(4))
-dir_down = ua.Variant(2, ua.VariantType(4))
-dir_left = ua.Variant(3, ua.VariantType(4))
-dir_right = ua.Variant(4, ua.VariantType(4))
-
-tool_none = ua.Variant(0, ua.VariantType(5))
-tool_1 = ua.Variant(1, ua.VariantType(5))
-#tool_2 = ua.Variant(2, ua.VariantType(5))
-#tool_3 = ua.Variant(3, ua.VariantType(5))
-
-ten_secs = ua.Variant(10000, ua.VariantType(8))
-fifteen_secs = ua.Variant(15000, ua.VariantType(8))
-twenty_secs = ua.Variant(20000, ua.VariantType(8))
-thirty_secs = ua.Variant(30000, ua.VariantType(8))
-
-tool_time = {
-    (('P1', 'P4'), ('P4', 'P8'), ('P8', 'P9')) : ten_secs,
-    (('P1', 'P2'), ('P2', 'P3'), ('P2', 'P6'), ('P6', 'P9'), ('P3', 'P4')) : fifteen_secs,
-    (('P1', 'P3'), ('P3', 'P7'), ('P7', 'P9')) : twenty_secs,
-    (('P4', 'P5')) : thirty_secs
-}
-
-
+from graph import Graph
+from transformations import Transformations
+import settings as st
+import time
+from datetime import datetime
 
 
 class BasicScheduler():
 
-    def __init__(self, tr):
-        self.order_list = []
+    def __init__(self, tr, factory, db):
+        self.active_tf_order = None
+        self.backlog = []
         self.transmitter = tr
+        self.trf = Transformations()
+        self.g = Graph(factory)
+        self.db = db
+        self.waiting_for_warehouse_piece = False
+        self.waiting_piece_type = 0
 
     def add(self, order):
-        self.order_list.append(order)
+
+        # assume order is a transformation_order
+        full_order = self.trf.get_best_layout(
+            order.from_, order.to)
+
+        full_order['type'] = 'tf'
+        full_order['from'] = order.from_
+        full_order['to'] = order.to
+        full_order['qty'] = int(order.qty)
+        full_order['id'] = int(order.ID)
+        full_order ['piece'] = 0
+
+        full_order['listen'] = [x[0] for x in full_order['layout']]
+        full_order['mach_working'] = [False for x in full_order['layout']]
+
+        if order.deadline is None:
+            full_order['deadline'] = datetime.fromtimestamp(time.time() + st.M)
+        else:
+            full_order['deadline'] = order.deadline
+
+        print(full_order)
+
+        full_order['directions'] = [self.g.directions_from_partial_layout(
+            lyt) for lyt in full_order['layout']]
+
+        print(full_order['directions'])
+
+        # rough, rough estimate
+        estimated_delta = 0
+        for path_times in full_order['mach_times']:
+            estimated_delta += max(path_times) * \
+                (len(path_times) + full_order['qty'] - 1)
+
+        estimated_delta /= full_order['num_paths']
+
+        full_order['estimated'] = datetime.fromtimestamp(
+            time.time() + estimated_delta)
+
+        if self.active_tf_order is None:
+            self.active_tf_order = full_order
+            self.change_layout(full_order)
+        else:
+            self.backlog.append(full_order)
 
     def schedule(self):
-        ROOT = "ns=4;s=|var|CODESYS Control Win V3 x64.Application"
-        ini_type=self.order_list[0].from_
-        fin_type=self.order_list[0].to
+        # self.orders = sorted(self.orders, key=lambda x: x['deadline'])
+        # print(f'orders: {self.orders}')
 
-        for key in tool_time:
-            for elem in key:
-                typ = (str(ini_type), str(fin_type))
-                if (elem == typ):
-                    time_tool=tool_time[key]
+        def _signal_warehouse_out():
+            print(f'Signaling for {self.waiting_piece_type}')
+            self.transmitter.get_node(
+                f"{st.ROOT}.GVL.ST1_tp"
+            ).set_value(st.as_piece(self.waiting_piece_type))
+            peca = 'P'+str(self.waiting_piece_type)
 
-        ini_t = int(ini_type[len(ini_type)//2:len(ini_type)])
-        piece = ua.DataValue(ua.Variant(ini_t, ua.VariantType(5)))
-        tr = self.transmitter
-        tr.get_node(f"{ROOT}.GVL.ST1_tp").set_value(piece)
-        
+            self.db.remove_piece_warehouse(peca)
 
-        # Set conveyors
-        LL = [
-            (1, 3),
-            (3, 8),
-            (8, 9),
-            (9, 10),
-            (10, 4),
-        ]
+        def _check_warehouse_available():
+            idx = self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.idx").get_value()
 
-        for i in range (len(LL)):
-            ll = LL[i]
-            if ((ll[0]==39 and ll[1]==40) or (ll[0]==46 and ll[1]==47)):
-                var = 'DIR['+str(i+1)+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_right)
-            
-            elif ((ll[0]==40 and ll[1]==39) or (ll[0]==47 and ll[1]==46)):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_left)
+            if idx == -1:
+                print('Available!')
 
-            elif (ll[0]==39 and ll[1]==41):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_down)
-
-            elif (ll[0]==41 and ll[1]==39):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_up)
-
-            elif (ll[1]==ll[0]+1):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_down)
-
-            elif (ll[1]==ll[0]-1):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_up)
-
-            elif (ll[1] > ll[0]+1):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_right)
-
-            elif (ll[1] < ll[0]-1):
-                var = 'DIR['+str(ll[0])+']' 
-                tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_left)
+                # Incrementa o nº de peças na database quando a peca entra no armazem
+                check_index = self.transmitter.get_node(f"{st.ROOT}.PLC_PRG.TAP_2.index_piece").get_value()
+                if check_index>-1:
+                    while(check_index>-1):
+                        piece_type2 = self.transmitter.get_node(f"{st.ROOT}.PLC_PRG.TAP_2.Pieces_ID[{check_index}][2]").get_value()
+                        piece_type3 = 'P'+str(piece_type2)
+                        self.db.add_piece_warehouse(piece_type3)
+                        for i in range(3):
+                            self.transmitter.get_node(f"{st.ROOT}.PLC_PRG.TAP_2.Pieces_ID[{check_index}][{i}]").set_value(st.as_int(0))
+                        check_index -=1
+                        self.transmitter.get_node(f"{st.ROOT}.PLC_PRG.TAP_2.index_piece").set_value(st.as_int(check_index))
 
 
-        # Set MA
-        tr.get_node(f"{ROOT}.PLC_PRG.TOOL4").set_value(tool_1)
+                return True
+            print('Unavailable!')
+            return False
 
-        # Wait for MA to start working
-        print('Waiting for MC')
-        while not tr.get_node(f"{ROOT}.GVL.ST4_tr").get_value():
-            pass
+        def _check_piece_here():
+            return self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.SENS").get_value()
 
-        print("Machine working!")
-        tr.get_node(f"{ROOT}.PLC_PRG.TOOL4").set_value(tool_none)
-        tr.get_node(f"{ROOT}.PLC_PRG.TOOL4_t").set_value(time_tool)
+        def send_order(order, num_path):
+            for i, dir_ in enumerate(order['directions'][num_path]):
+                self.transmitter.get_node(
+                    f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.dirs[{i}]"
+                ).set_value(st.as_int(dir_))
 
-        # Set the rest of the path
-        LL = [
-            ("DIR[4]", dir_right),
-            ("DIR[10]", dir_down),
-            ("DIR[11]", dir_down),
-            ("DIR[12]", dir_down),
-            ("DIR[13]", dir_down),
-            ("DIR[14]", dir_left),
-            ("DIR[7]", dir_left),
-            ("DIR[2]", dir_left),
-        ]
+            for i, elem in enumerate(order['sequences'][num_path]):
+                typep = int(elem[1])
+                print("TYPEP : " +str(typep))
+                self.transmitter.get_node(
+                    f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_types[{i}]"
+                ).set_value(st.as_int(typep))
 
-        for var, dir_ in LL:
-            tr.get_node(f"{ROOT}.GVL.{var}").set_value(dir_)
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.idx"
+            ).set_value(st.as_int(1))
+
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_idx"
+            ).set_value(st.as_int(0))
+
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.order_id"
+            ).set_value(st.as_int(order['id']))
+
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_id"
+            ).set_value(st.as_int(order['piece']))
+
+            """ self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_types[1]"
+            ).set_value(st.as_int(1))
+
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_types[2]"
+            ).set_value(st.as_int(2))
+
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_types[3]"
+            ).set_value(st.as_int(3))
+
+            self.transmitter.get_node(
+                f"{st.ROOT}.PLC_PRG.TAP_1.PIECE_T.piece_types[4]"
+            ).set_value(st.as_int(4))
+ """
+        if not self.waiting_for_warehouse_piece:
+            if _check_warehouse_available():
+                # scan for machines that are free
+                def _send_order_when_ready(order):
+                    for num, listen in enumerate(order['listen'][::-1]):
+                        n_path = order['num_paths'] - 1 - num
+
+                        i = st.machs[listen]
+                        val = self.transmitter.get_node(
+                            f"{st.ROOT}.PLC_PRG.TAP_{i}.MAC_1.TIMES_MACHINED"
+                        ).get_value()
+
+                        print(f'n_path: {n_path}, val: {val}')
+
+                        # machine resting
+                        if val == 1:
+                            # check if machine was previously
+                            # caught machining
+                            if not order['mach_working'][n_path]:
+                                print('sending order!')
+                                order['mach_working'][n_path] = True
+                                send_order(order, n_path)
+                                return True
+
+                        # machine machining
+                        elif val == 0:
+                            # check if machine was previously
+                            # caught resting
+                            if order['mach_working'][n_path]:
+                                order['mach_working'][n_path] = False
+
+                    return False
+
+                if self.active_tf_order is not None:
+                    order = self.active_tf_order 
+
+                    print(order['qty'])
+                    if _send_order_when_ready(order):
+                        self.waiting_for_warehouse_piece = True
+                        self.waiting_piece_type = int(order['from'][1])
+                        order['qty'] -= 1
+                        order['piece'] += 1
+                        _signal_warehouse_out()
+
+                        if order['qty'] == 0:
+                            self.active_tf_order = None
+                        return
+
+                # process other orders?
+
+        if self.waiting_for_warehouse_piece:
+            piece_here = _check_piece_here()
+            print(f'Checking for piece... {piece_here}')
+
+            if piece_here:
+                self.waiting_for_warehouse_piece = False
+                self.waiting_piece_type = 0
+                # the magic bullet?
+                _signal_warehouse_out()
+
+                self.schedule()
+
+    def change_layout(self, order):
+        for num_path, partial_lyt in enumerate(order['layout']):
+            mach_info = order['mach_info'][num_path]
+            mach_times = order['mach_times'][num_path]
+
+            for i, pos in enumerate(partial_lyt):
+                idx = st.machs[pos]
+                tool = int(mach_info[i][1])
+                time = mach_times[i]
+
+                print(f'idx: {idx}, tool: {tool}, time: {time}')
+
+                self.transmitter.get_node(
+                    f"{st.ROOT}.PLC_PRG.TAP_{idx}.MAC_1.TOOL"
+                ).set_value(st.as_int(tool))
+
+                self.transmitter.get_node(
+                    f"{st.ROOT}.PLC_PRG.TAP_{idx}.MAC_1.TOOL_TIME"
+                ).set_value(st.as_seconds(time))
